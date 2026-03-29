@@ -1,0 +1,307 @@
+
+#include <Arduino.h>
+#include "CANBus_Driver.h"
+#include "LVGL_Driver.h"
+#include "I2C_Driver.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include "freertos/queue.h"
+#include "widgets/turbo_gauge.h"
+#include <string>
+#include <optional>
+
+extern const lv_font_t univers_40;
+
+#define CAN_QUEUE_LENGTH 32
+#define CAN_QUEUE_ITEM_SIZE sizeof(twai_message_t)
+#define TAG "TWAI"
+
+QueueHandle_t can_queue;
+QueueHandle_t err_queue;
+
+lv_obj_t *main_screen;
+lv_obj_t *debug_text = NULL;
+lv_subject_t boost;
+bool DEBUG_MODE = false;
+bool should_update_ui = false;
+
+const int TIMEOUT_ERR = 0;
+const int BAD_QUEUE_RESPONSE_ERR = 1;
+const int BAD_RESPONSE_ERR = 2;
+static const char *ERROR_CODES[] =
+    {
+        "TIMEOUT",
+        "BAD QUEUE RESPONSE",
+        "BAD RESPONSE"};
+
+enum PIDType
+{
+    REQUEST = 0x7E0,
+    RESPONSE = 0x7E8
+};
+
+enum EngineValue
+{
+    AMBIENT = 0xF4,
+    MANIFOLD = 0x20
+};
+
+typedef struct struct_car_data
+{
+    int boost;
+    int ambient;
+    int map;
+} struct_car_data;
+
+struct_car_data car_data;
+
+void drivers_init(void)
+{
+    i2c_init();
+
+    Serial.println("Scanning for TCA9554...");
+    bool found = false;
+    for (int attempt = 0; attempt < 10; attempt++)
+    {
+        if (i2c_scan_address(0x20))
+        { // 0x20 is default for TCA9554
+            found = true;
+            break;
+        }
+        delay(50); // wait a bit before retrying
+    }
+
+    if (!found)
+    {
+        Serial.println("TCA9554 not detected! Skipping expander init.");
+    }
+    else
+    {
+        tca9554pwr_init(0x00);
+    }
+    lcd_init();
+    canbus_init();
+    lvgl_init();
+    lv_theme_t *theme = lv_theme_default_init(NULL, lv_palette_main(LV_PALETTE_BLUE),
+                                              lv_palette_main(LV_PALETTE_RED),
+                                              true, &univers_40);
+    lv_disp_set_theme(NULL, theme);
+}
+
+void log_error(int error)
+{
+    if (DEBUG_MODE)
+    {
+        xQueueSend(err_queue, &error, pdMS_TO_TICKS(2));
+    }
+}
+
+void screen_init(void)
+{
+    main_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(main_screen, lv_color_hex(0x000000), 0);
+    lv_screen_load(main_screen);
+}
+
+float kpa_to_psi(float kpa)
+{
+    return kpa / 6.895f;
+}
+
+float calculate_boost(int map, int ambient)
+{
+    float ambient_act = kpa_to_psi(ambient);
+    float map_act = kpa_to_psi(map / 10.0f);
+
+    float value = map_act - ambient_act;
+
+    return value;
+}
+
+void send_can_task(void *arg)
+{
+    twai_message_t request_ambient;
+    request_ambient.identifier = PIDType::REQUEST;
+    request_ambient.extd = 0;
+    request_ambient.data_length_code = 8;
+    int ambient_req[8] = {0x03, 0x22, 0xF4, 0x33, 0x00, 0x00, 0x00, 0x00};
+    for (int i = 0; i < 8; i++)
+    {
+        request_ambient.data[i] = ambient_req[i];
+    }
+
+    twai_message_t request_map;
+    request_map.identifier = PIDType::REQUEST;
+    request_map.extd = 0;
+    request_map.data_length_code = 8;
+    int map_req[8] = {0x03, 0x22, 0x20, 0x2A, 0x00, 0x00, 0x00, 0x00};
+    for (int i = 0; i < 8; i++)
+    {
+        request_map.data[i] = map_req[i];
+    }
+
+    while (true)
+    {
+        twai_transmit(&request_ambient, pdMS_TO_TICKS(10));
+        twai_transmit(&request_map, pdMS_TO_TICKS(10));
+
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+void receive_can_task(void *arg)
+{
+    twai_message_t message;
+    while (true)
+    {
+        esp_err_t err = twai_receive(&message, pdMS_TO_TICKS(2));
+        if (err == ESP_ERR_TIMEOUT)
+        {
+            log_error(TIMEOUT_ERR);
+        }
+        else if (err != ESP_OK)
+        {
+            log_error(BAD_QUEUE_RESPONSE_ERR);
+        }
+        else if (err == ESP_OK)
+        {
+            if (message.identifier != PIDType::RESPONSE)
+            {
+                continue;
+            }
+
+            xQueueSend(can_queue, &message, pdMS_TO_TICKS(2));
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+void process_can_task(void *arg)
+{
+    std::optional<int> ambient;
+    std::optional<int> map;
+    twai_message_t message;
+    while (true)
+    {
+        if (xQueueReceive(can_queue, &message, pdMS_TO_TICKS(1)) != pdTRUE)
+        {
+            continue;
+        }
+
+        switch (message.data[2])
+        {
+        case EngineValue::AMBIENT:
+            ambient = message.data[4];
+            break;
+        case EngineValue::MANIFOLD:
+            int hi = message.data[4];
+            int lo = message.data[5];
+            map = (hi << 8) | lo;
+            break;
+        }
+
+        if (map.has_value() && ambient.has_value())
+        {
+            int boost_act = (int)(calculate_boost(map.value(), ambient.value()) * 10);
+
+            car_data.boost = boost_act;
+            car_data.ambient = ambient.value();
+            car_data.map = map.value();
+
+            map.reset();
+            ambient.reset();
+
+            should_update_ui = true;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+void setup(void)
+{
+    Serial.begin(115200);
+    drivers_init();
+    set_backlight(80);
+    screen_init();
+    set_exio(EXIO_PIN4, Low);
+    esp_reset_reason_t reason = esp_reset_reason();
+    car_data.boost = 0;
+
+    lv_obj_clear_flag(main_screen, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_subject_init_int(&boost, 0);
+    create_turbo_gauge(main_screen);
+
+    // Queue Creation
+    can_queue = xQueueCreate(CAN_QUEUE_LENGTH, CAN_QUEUE_ITEM_SIZE);
+    if (can_queue == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to create CAN queue");
+        while (true)
+            vTaskDelay(1000);
+    }
+
+    if (DEBUG_MODE)
+    {
+        debug_text = lv_label_create(main_screen);
+        lv_obj_set_style_text_font(debug_text, &univers_40, LV_PART_MAIN);
+        lv_obj_align(debug_text, LV_ALIGN_CENTER, 0, 50);
+        lv_label_set_text(debug_text, "Waiting...");
+
+        err_queue = xQueueCreate(10, sizeof(int));
+        if (err_queue == NULL)
+        {
+            ESP_LOGE(TAG, "Failed to create Error Queue");
+            while (true)
+                vTaskDelay(1000);
+        }
+    }
+
+    xTaskCreatePinnedToCore(
+        send_can_task,
+        "send_can_task",
+        4096,
+        NULL,
+        2,
+        NULL,
+        1);
+    xTaskCreatePinnedToCore(
+        receive_can_task,
+        "receive_can_task",
+        4096,
+        NULL,
+        2,
+        NULL,
+        0);
+    xTaskCreatePinnedToCore(
+        process_can_task,
+        "process_can_task",
+        4096,
+        NULL,
+        2,
+        NULL,
+        1);
+}
+
+void loop(void)
+{
+    lv_timer_handler();
+
+    if (DEBUG_MODE)
+    {
+        int err_code;
+        if (xQueueReceive(err_queue, &err_code, pdMS_TO_TICKS(1)) == pdTRUE)
+        {
+            lv_label_set_text(debug_text, ERROR_CODES[err_code]);
+        }
+    }
+
+    if (should_update_ui)
+    {
+        lv_subject_set_int(&boost, car_data.boost);
+        should_update_ui = false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1));
+}
