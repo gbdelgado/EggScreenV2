@@ -7,6 +7,7 @@
 #include <freertos/task.h>
 #include "freertos/queue.h"
 #include "widgets/turbo_gauge.h"
+#include "widgets/accelerator_gauge.h"
 #include <string>
 #include <optional>
 
@@ -22,6 +23,10 @@ QueueHandle_t err_queue;
 lv_obj_t *main_screen;
 lv_obj_t *debug_text = NULL;
 lv_subject_t boost;
+lv_subject_t accelerator_pos;
+TurboGauge *turbo_gauge;
+AcceleratorGauge *accel_gauge;
+
 bool DEBUG_MODE = false;
 bool should_update_ui = false;
 
@@ -42,8 +47,9 @@ enum PIDType
 
 enum EngineValue
 {
-    AMBIENT = 0xF4,
-    MANIFOLD = 0x20
+    AMBIENT = 0xF433,
+    MANIFOLD = 0x202A,
+    ACCELERATOR_POS = 0xF449
 };
 
 typedef struct struct_car_data
@@ -51,6 +57,7 @@ typedef struct struct_car_data
     int boost;
     int ambient;
     int map;
+    int accelerator_pos;
 } struct_car_data;
 
 struct_car_data car_data;
@@ -118,34 +125,39 @@ float calculate_boost(int map, int ambient)
     return value;
 }
 
-void send_can_task(void *arg)
+twai_message_t create_can_request(int id, const int payload[8])
 {
-    twai_message_t request_ambient;
-    request_ambient.identifier = PIDType::REQUEST;
-    request_ambient.extd = 0;
-    request_ambient.data_length_code = 8;
-    int ambient_req[8] = {0x03, 0x22, 0xF4, 0x33, 0x00, 0x00, 0x00, 0x00};
+    twai_message_t msg;
+    msg.identifier = id;
+    msg.extd = 0;
+    msg.data_length_code = 8;
+
     for (int i = 0; i < 8; i++)
     {
-        request_ambient.data[i] = ambient_req[i];
+        msg.data[i] = payload[i];
     }
 
-    twai_message_t request_map;
-    request_map.identifier = PIDType::REQUEST;
-    request_map.extd = 0;
-    request_map.data_length_code = 8;
+    return msg;
+}
+
+void send_can_task(void *arg)
+{
+    int ambient_req[8] = {0x03, 0x22, 0xF4, 0x33, 0x00, 0x00, 0x00, 0x00};
     int map_req[8] = {0x03, 0x22, 0x20, 0x2A, 0x00, 0x00, 0x00, 0x00};
-    for (int i = 0; i < 8; i++)
-    {
-        request_map.data[i] = map_req[i];
-    }
+    int accel_req[8] = {0x03, 0x22, 0xF4, 0x49, 0x00, 0x00, 0x00, 0x00};
+
+    twai_message_t request_ambient = create_can_request(PIDType::REQUEST, ambient_req);
+    twai_message_t request_map = create_can_request(PIDType::REQUEST, map_req);
+    twai_message_t request_accel = create_can_request(PIDType::REQUEST, accel_req);
 
     while (true)
     {
         twai_transmit(&request_ambient, pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(5));
         twai_transmit(&request_map, pdMS_TO_TICKS(10));
-
-        vTaskDelay(pdMS_TO_TICKS(1));
+        vTaskDelay(pdMS_TO_TICKS(5));
+        twai_transmit(&request_accel, pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
 
@@ -181,6 +193,7 @@ void process_can_task(void *arg)
 {
     std::optional<int> ambient;
     std::optional<int> map;
+    std::optional<int> accel_pos;
     twai_message_t message;
     while (true)
     {
@@ -189,16 +202,26 @@ void process_can_task(void *arg)
             continue;
         }
 
-        switch (message.data[2])
+        int response_id = (message.data[2] << 8) | message.data[3];
+        switch (response_id)
         {
         case EngineValue::AMBIENT:
+        {
             ambient = message.data[4];
             break;
+        }
         case EngineValue::MANIFOLD:
+        {
             int hi = message.data[4];
             int lo = message.data[5];
             map = (hi << 8) | lo;
             break;
+        }
+        case EngineValue::ACCELERATOR_POS:
+        {
+            accel_pos = message.data[4];
+            break;
+        }
         }
 
         if (map.has_value() && ambient.has_value())
@@ -212,6 +235,13 @@ void process_can_task(void *arg)
             map.reset();
             ambient.reset();
 
+            should_update_ui = true;
+        }
+
+        if (accel_pos.has_value())
+        {
+            car_data.accelerator_pos = accel_pos.value();
+            accel_pos.reset();
             should_update_ui = true;
         }
 
@@ -232,9 +262,11 @@ void setup(void)
     lv_obj_clear_flag(main_screen, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_subject_init_int(&boost, 0);
-    create_turbo_gauge(main_screen);
+    // idk why the min value is 40
+    lv_subject_init_int(&accelerator_pos, 0x28);
+    turbo_gauge = new TurboGauge(main_screen);
+    accel_gauge = new AcceleratorGauge(main_screen);
 
-    // Queue Creation
     can_queue = xQueueCreate(CAN_QUEUE_LENGTH, CAN_QUEUE_ITEM_SIZE);
     if (can_queue == NULL)
     {
@@ -301,6 +333,7 @@ void loop(void)
     if (should_update_ui)
     {
         lv_subject_set_int(&boost, car_data.boost);
+        lv_subject_set_int(&accelerator_pos, car_data.accelerator_pos);
         should_update_ui = false;
     }
     vTaskDelay(pdMS_TO_TICKS(1));
