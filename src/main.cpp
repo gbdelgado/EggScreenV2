@@ -8,9 +8,10 @@
 #include "freertos/queue.h"
 #include "widgets/turbo_gauge.h"
 #include "widgets/accelerator_gauge.h"
+#include "utils/can_id.h"
 #include "utils/utils/utils.h"
-#include "utils/pid_type.h"
 #include "utils/uds_id.h"
+#include "utils/can_helper/can_helper.h"
 #include <string>
 #include <optional>
 
@@ -99,30 +100,11 @@ void screen_init(void)
     lv_screen_load(main_screen);
 }
 
-twai_message_t create_can_request(int id, const int payload[8])
-{
-    twai_message_t msg;
-    msg.identifier = id;
-    msg.extd = 0;
-    msg.data_length_code = 8;
-
-    for (int i = 0; i < 8; i++)
-    {
-        msg.data[i] = payload[i];
-    }
-
-    return msg;
-}
-
 void send_can_task(void *arg)
 {
-    int ambient_req[8] = {0x03, 0x22, 0xF4, 0x33, 0x00, 0x00, 0x00, 0x00};
-    int map_req[8] = {0x03, 0x22, 0x39, 0xC0, 0x00, 0x00, 0x00, 0x00};
-    int accel_req[8] = {0x03, 0x22, 0xF4, 0x49, 0x00, 0x00, 0x00, 0x00};
-
-    twai_message_t request_ambient = create_can_request(PIDType::REQUEST, ambient_req);
-    twai_message_t request_map = create_can_request(PIDType::REQUEST, map_req);
-    twai_message_t request_accel = create_can_request(PIDType::REQUEST, accel_req);
+    twai_message_t request_ambient = CanHelper::create_can_request(UDSId::AMBIENT_AIR);
+    twai_message_t request_map = CanHelper::create_can_request(UDSId::MANIFOLD_AIR);
+    twai_message_t request_accel = CanHelper::create_can_request(UDSId::ACCELERATOR_POS);
 
     while (true)
     {
@@ -151,7 +133,7 @@ void receive_can_task(void *arg)
         }
         else if (err == ESP_OK)
         {
-            if (message.identifier != PIDType::RESPONSE)
+            if (message.identifier != CANId::RESPONSE)
             {
                 continue;
             }
