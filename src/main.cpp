@@ -8,6 +8,9 @@
 #include "freertos/queue.h"
 #include "widgets/turbo_gauge.h"
 #include "widgets/accelerator_gauge.h"
+#include "utils/utils/utils.h"
+#include "utils/pid_type.h"
+#include "utils/uds_id.h"
 #include <string>
 #include <optional>
 
@@ -38,20 +41,6 @@ static const char *ERROR_CODES[] =
         "TIMEOUT",
         "BAD QUEUE RESPONSE",
         "BAD RESPONSE"};
-
-enum PIDType
-{
-    REQUEST = 0x7E0,
-    RESPONSE = 0x7E8
-};
-
-enum EngineValue
-{
-    AMBIENT = 0xF433,
-    MANIFOLD = 0x202A,
-    ACCELERATOR_POS = 0xF449
-};
-
 typedef struct struct_car_data
 {
     int boost;
@@ -110,21 +99,6 @@ void screen_init(void)
     lv_screen_load(main_screen);
 }
 
-float kpa_to_psi(float kpa)
-{
-    return kpa / 6.895f;
-}
-
-float calculate_boost(int map, int ambient)
-{
-    float ambient_act = kpa_to_psi(ambient);
-    float map_act = kpa_to_psi(map / 10.0f);
-
-    float value = map_act - ambient_act;
-
-    return value;
-}
-
 twai_message_t create_can_request(int id, const int payload[8])
 {
     twai_message_t msg;
@@ -143,7 +117,7 @@ twai_message_t create_can_request(int id, const int payload[8])
 void send_can_task(void *arg)
 {
     int ambient_req[8] = {0x03, 0x22, 0xF4, 0x33, 0x00, 0x00, 0x00, 0x00};
-    int map_req[8] = {0x03, 0x22, 0x20, 0x2A, 0x00, 0x00, 0x00, 0x00};
+    int map_req[8] = {0x03, 0x22, 0x39, 0xC0, 0x00, 0x00, 0x00, 0x00};
     int accel_req[8] = {0x03, 0x22, 0xF4, 0x49, 0x00, 0x00, 0x00, 0x00};
 
     twai_message_t request_ambient = create_can_request(PIDType::REQUEST, ambient_req);
@@ -205,19 +179,19 @@ void process_can_task(void *arg)
         int response_id = (message.data[2] << 8) | message.data[3];
         switch (response_id)
         {
-        case EngineValue::AMBIENT:
+        case UDSId::AMBIENT_AIR:
         {
             ambient = message.data[4];
             break;
         }
-        case EngineValue::MANIFOLD:
+        case UDSId::MANIFOLD_AIR:
         {
             int hi = message.data[4];
             int lo = message.data[5];
             map = (hi << 8) | lo;
             break;
         }
-        case EngineValue::ACCELERATOR_POS:
+        case UDSId::ACCELERATOR_POS:
         {
             accel_pos = message.data[4];
             break;
@@ -226,7 +200,7 @@ void process_can_task(void *arg)
 
         if (map.has_value() && ambient.has_value())
         {
-            int boost_act = (int)(calculate_boost(map.value(), ambient.value()) * 10);
+            int boost_act = (int)(Utils::calculate_boost(map.value(), ambient.value()) * 10);
 
             car_data.boost = boost_act;
             car_data.ambient = ambient.value();
