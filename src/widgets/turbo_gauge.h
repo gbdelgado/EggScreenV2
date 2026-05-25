@@ -14,6 +14,7 @@ class TurboGauge
 public:
     explicit TurboGauge(lv_obj_t *parent);
     void set_value(int value);
+    void play_intro_animation();
 
 private:
     lv_obj_t *arc;
@@ -25,4 +26,5 @@ private:
     static constexpr int MAX_BOOST = 270;
 
     static void handle_boost_change(lv_observer_t *observer, lv_subject_t *subject);
+    static void handle_intro_anim_cb(void *var, int32_t v);
 };

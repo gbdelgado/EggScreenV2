@@ -247,6 +247,9 @@ void setup(void)
         }
     }
 
+    turbo_gauge->play_intro_animation();
+    accel_gauge->play_intro_animation();
+
     xTaskCreatePinnedToCore(
         send_can_task,
         "send_can_task",

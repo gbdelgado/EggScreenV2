@@ -45,3 +45,22 @@ void TurboGauge::handle_boost_change(lv_observer_t *observer, lv_subject_t *subj
     snprintf(buf, sizeof(buf), "%.1f", real_value);
     lv_label_set_text(self->label, buf);
 }
+
+void TurboGauge::handle_intro_anim_cb(void *var, int32_t value)
+{
+    lv_subject_set_int(&boost, value);
+}
+
+void TurboGauge::play_intro_animation()
+{
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_values(&a, MIN_BOOST, MAX_BOOST);
+    lv_anim_set_duration(&a, 1000);
+    lv_anim_set_reverse_delay(&a, 100);
+    lv_anim_set_reverse_duration(&a, 500);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+
+    lv_anim_set_exec_cb(&a, this->handle_intro_anim_cb);
+    lv_anim_start(&a);
+}
