@@ -18,11 +18,10 @@
 extern const lv_font_t univers_40;
 
 #define CAN_QUEUE_LENGTH 32
-#define CAN_QUEUE_ITEM_SIZE sizeof(twai_message_t)
 #define TAG "TWAI"
 
-QueueHandle_t can_queue;
 QueueHandle_t err_queue;
+QueueHandle_t ui_queue;
 
 lv_obj_t *main_screen;
 lv_obj_t *debug_text = NULL;
@@ -32,7 +31,6 @@ TurboGauge *turbo_gauge;
 AcceleratorGauge *accel_gauge;
 
 bool DEBUG_MODE = false;
-bool should_update_ui = false;
 
 const int TIMEOUT_ERR = 0;
 const int BAD_QUEUE_RESPONSE_ERR = 1;
@@ -49,8 +47,6 @@ typedef struct struct_car_data
     int map;
     int accelerator_pos;
 } struct_car_data;
-
-struct_car_data car_data;
 
 void drivers_init(void)
 {
@@ -117,43 +113,22 @@ void send_can_task(void *arg)
     }
 }
 
-void receive_can_task(void *arg)
-{
-    twai_message_t message;
-    while (true)
-    {
-        esp_err_t err = twai_receive(&message, pdMS_TO_TICKS(2));
-        if (err == ESP_ERR_TIMEOUT)
-        {
-            log_error(TIMEOUT_ERR);
-        }
-        else if (err != ESP_OK)
-        {
-            log_error(BAD_QUEUE_RESPONSE_ERR);
-        }
-        else if (err == ESP_OK)
-        {
-            if (message.identifier != CANId::RESPONSE)
-            {
-                continue;
-            }
-
-            xQueueSend(can_queue, &message, pdMS_TO_TICKS(2));
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(1));
-    }
-}
-
 void process_can_task(void *arg)
 {
     std::optional<int> ambient;
     std::optional<int> map;
     std::optional<int> accel_pos;
+    struct_car_data car_data = {};
     twai_message_t message;
+
     while (true)
     {
-        if (xQueueReceive(can_queue, &message, pdMS_TO_TICKS(1)) != pdTRUE)
+        esp_err_t err = twai_receive(&message, portMAX_DELAY);
+        if (err != ESP_OK)
+        {
+            continue;
+        }
+        else if (err == ESP_OK && message.identifier != CANId::RESPONSE)
         {
             continue;
         }
@@ -191,17 +166,16 @@ void process_can_task(void *arg)
             map.reset();
             ambient.reset();
 
-            should_update_ui = true;
+            xQueueOverwrite(ui_queue, &car_data);
         }
 
         if (accel_pos.has_value())
         {
             car_data.accelerator_pos = accel_pos.value();
             accel_pos.reset();
-            should_update_ui = true;
-        }
 
-        vTaskDelay(pdMS_TO_TICKS(1));
+            xQueueOverwrite(ui_queue, &car_data);
+        }
     }
 }
 
@@ -213,7 +187,6 @@ void setup(void)
     screen_init();
     set_exio(EXIO_PIN4, Low);
     esp_reset_reason_t reason = esp_reset_reason();
-    car_data.boost = 0;
 
     lv_obj_clear_flag(main_screen, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -222,11 +195,13 @@ void setup(void)
     lv_subject_init_int(&accelerator_pos, 0x28);
     turbo_gauge = new TurboGauge(main_screen);
     accel_gauge = new AcceleratorGauge(main_screen);
+    turbo_gauge->play_intro_animation();
+    accel_gauge->play_intro_animation();
 
-    can_queue = xQueueCreate(CAN_QUEUE_LENGTH, CAN_QUEUE_ITEM_SIZE);
-    if (can_queue == NULL)
+    ui_queue = xQueueCreate(CAN_QUEUE_LENGTH, sizeof(struct_car_data));
+    if (ui_queue == NULL)
     {
-        ESP_LOGE(TAG, "Failed to create CAN queue");
+        ESP_LOGE(TAG, "Failed to create UI queue");
         while (true)
             vTaskDelay(1000);
     }
@@ -247,25 +222,16 @@ void setup(void)
         }
     }
 
-    turbo_gauge->play_intro_animation();
-    accel_gauge->play_intro_animation();
+    vTaskDelay(pdMS_TO_TICKS(1500));
 
     xTaskCreatePinnedToCore(
         send_can_task,
         "send_can_task",
         4096,
         NULL,
-        2,
+        1,
         NULL,
         1);
-    xTaskCreatePinnedToCore(
-        receive_can_task,
-        "receive_can_task",
-        4096,
-        NULL,
-        2,
-        NULL,
-        0);
     xTaskCreatePinnedToCore(
         process_can_task,
         "process_can_task",
@@ -277,7 +243,10 @@ void setup(void)
 }
 
 void loop(void)
+
 {
+
+    struct_car_data car_data;
     lv_timer_handler();
 
     if (DEBUG_MODE)
@@ -289,11 +258,11 @@ void loop(void)
         }
     }
 
-    if (should_update_ui)
+    if (xQueueReceive(ui_queue, &car_data, 0) == pdTRUE)
     {
         lv_subject_set_int(&boost, car_data.boost);
         lv_subject_set_int(&accelerator_pos, car_data.accelerator_pos);
-        should_update_ui = false;
     }
+
     vTaskDelay(pdMS_TO_TICKS(1));
 }
