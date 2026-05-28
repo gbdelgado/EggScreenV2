@@ -17,7 +17,7 @@
 
 extern const lv_font_t univers_40;
 
-#define CAN_QUEUE_LENGTH 32
+#define UI_QUEUE_LENGTH 1
 #define TAG "TWAI"
 
 QueueHandle_t err_queue;
@@ -195,10 +195,8 @@ void setup(void)
     lv_subject_init_int(&accelerator_pos, 0x28);
     turbo_gauge = new TurboGauge(main_screen);
     accel_gauge = new AcceleratorGauge(main_screen);
-    turbo_gauge->play_intro_animation();
-    accel_gauge->play_intro_animation();
 
-    ui_queue = xQueueCreate(CAN_QUEUE_LENGTH, sizeof(struct_car_data));
+    ui_queue = xQueueCreate(UI_QUEUE_LENGTH, sizeof(struct_car_data));
     if (ui_queue == NULL)
     {
         ESP_LOGE(TAG, "Failed to create UI queue");
@@ -222,8 +220,6 @@ void setup(void)
         }
     }
 
-    vTaskDelay(pdMS_TO_TICKS(1500));
-
     xTaskCreatePinnedToCore(
         send_can_task,
         "send_can_task",
@@ -231,7 +227,7 @@ void setup(void)
         NULL,
         1,
         NULL,
-        1);
+        0);
     xTaskCreatePinnedToCore(
         process_can_task,
         "process_can_task",
@@ -239,13 +235,11 @@ void setup(void)
         NULL,
         2,
         NULL,
-        1);
+        0);
 }
 
 void loop(void)
-
 {
-
     struct_car_data car_data;
     lv_timer_handler();
 
