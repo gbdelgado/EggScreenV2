@@ -29,6 +29,8 @@ TurboGauge::TurboGauge(lv_obj_t *parent)
     lv_obj_set_style_text_color(units_label, lv_color_hex(GAUGE_COLOR_WHITE), LV_PART_MAIN);
     lv_obj_align(units_label, LV_ALIGN_CENTER, 0, 70);
     lv_label_set_text(units_label, "PSI");
+
+    this->animating = false;
 }
 
 void TurboGauge::handle_boost_change(lv_observer_t *observer, lv_subject_t *subject)
@@ -51,6 +53,17 @@ void TurboGauge::handle_intro_anim_cb(void *var, int32_t value)
     lv_subject_set_int(&boost, value);
 }
 
+void TurboGauge::handle_intro_anim_complete(lv_anim_t *anim)
+{
+    TurboGauge *self = static_cast<TurboGauge *>(anim->var);
+    if (!self)
+    {
+        return;
+    }
+
+    self->animating = false;
+}
+
 void TurboGauge::play_intro_animation()
 {
     lv_anim_t a;
@@ -60,7 +73,15 @@ void TurboGauge::play_intro_animation()
     lv_anim_set_reverse_delay(&a, 100);
     lv_anim_set_reverse_duration(&a, 500);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_set_var(&a, this);
 
     lv_anim_set_exec_cb(&a, this->handle_intro_anim_cb);
+    lv_anim_set_completed_cb(&a, this->handle_intro_anim_complete);
+    this->animating = true;
     lv_anim_start(&a);
+}
+
+bool TurboGauge::is_animating()
+{
+    return this->animating;
 }

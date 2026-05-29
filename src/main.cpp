@@ -196,6 +196,9 @@ void setup(void)
     turbo_gauge = new TurboGauge(main_screen);
     accel_gauge = new AcceleratorGauge(main_screen);
 
+    turbo_gauge->play_intro_animation();
+    accel_gauge->play_intro_animation();
+
     ui_queue = xQueueCreate(UI_QUEUE_LENGTH, sizeof(struct_car_data));
     if (ui_queue == NULL)
     {
@@ -252,7 +255,10 @@ void loop(void)
         }
     }
 
-    if (xQueueReceive(ui_queue, &car_data, 0) == pdTRUE)
+    bool is_animating = turbo_gauge->is_animating() || accel_gauge->is_animating();
+    BaseType_t resp = xQueueReceive(ui_queue, &car_data, 0);
+
+    if (!is_animating && resp == pdTRUE)
     {
         lv_subject_set_int(&boost, car_data.boost);
         lv_subject_set_int(&accelerator_pos, car_data.accelerator_pos);

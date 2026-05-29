@@ -20,11 +20,24 @@ AcceleratorGauge::AcceleratorGauge(lv_obj_t *parent)
     lv_obj_set_style_arc_color(arc, lv_color_hex(GAUGE_COLOR_GREEN_PRIMARY), LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(arc, lv_color_hex(GAUGE_COLOR_GREEN_SECONDARY), LV_PART_MAIN);
     lv_arc_bind_value(arc, &accelerator_pos);
+
+    this->animating = false;
 }
 
 void AcceleratorGauge::handle_intro_anim_cb(void *var, int32_t value)
 {
     lv_subject_set_int(&accelerator_pos, value);
+}
+
+void AcceleratorGauge::handle_intro_anim_complete(lv_anim_t *anim)
+{
+    AcceleratorGauge *self = static_cast<AcceleratorGauge *>(anim->var);
+    if (!self)
+    {
+        return;
+    }
+
+    self->animating = false;
 }
 
 void AcceleratorGauge::play_intro_animation()
@@ -36,7 +49,15 @@ void AcceleratorGauge::play_intro_animation()
     lv_anim_set_reverse_delay(&a, 100);
     lv_anim_set_reverse_duration(&a, 500);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_set_var(&a, this);
 
     lv_anim_set_exec_cb(&a, this->handle_intro_anim_cb);
+    lv_anim_set_completed_cb(&a, this->handle_intro_anim_complete);
+    this->animating = true;
     lv_anim_start(&a);
+}
+
+bool AcceleratorGauge::is_animating()
+{
+    return this->animating;
 }
