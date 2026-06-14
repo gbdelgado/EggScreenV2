@@ -1,11 +1,11 @@
 #pragma once
+#include <cstdio>
 #include <lvgl.h>
 
 #define GAUGE_COLOR_RED_PRIMARY 0xFF3A5D
 #define GAUGE_COLOR_RED_SECONDARY 0x420A0C
 #define GAUGE_COLOR_WHITE 0xF9F9F9
 
-extern lv_subject_t boost;
 extern const lv_font_t univers_40;
 extern const lv_font_t univers_90;
 
@@ -22,6 +22,7 @@ private:
     lv_obj_t *label;
     lv_obj_t *units_label;
     lv_obj_t *name_label;
+    lv_subject_t boost;
     bool animating;
 
     static constexpr int MIN_BOOST = 0;

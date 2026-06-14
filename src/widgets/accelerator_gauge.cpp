@@ -1,13 +1,14 @@
-#include <cstdio>
 #include "accelerator_gauge.h"
-
-extern lv_subject_t accelerator_pos;
 
 const int MIN_VALUE = 0x28;
 const int MAX_VALUE = 0xDF;
 
 AcceleratorGauge::AcceleratorGauge(lv_obj_t *parent)
 {
+    lv_subject_t accelerator_pos;
+    lv_subject_init_int(&accelerator_pos, MIN_VALUE);
+    this->accelerator_pos = accelerator_pos;
+
     arc = lv_arc_create(parent);
     lv_arc_set_bg_angles(arc, 45, 135);
     lv_arc_set_range(arc, MIN_VALUE, MAX_VALUE);
@@ -19,14 +20,25 @@ AcceleratorGauge::AcceleratorGauge(lv_obj_t *parent)
     lv_obj_center(arc);
     lv_obj_set_style_arc_color(arc, lv_color_hex(GAUGE_COLOR_GREEN_PRIMARY), LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(arc, lv_color_hex(GAUGE_COLOR_GREEN_SECONDARY), LV_PART_MAIN);
-    lv_arc_bind_value(arc, &accelerator_pos);
+    lv_arc_bind_value(arc, &this->accelerator_pos);
 
     this->animating = false;
 }
 
+void AcceleratorGauge::set_value(int value)
+{
+    lv_subject_set_int(&this->accelerator_pos, value);
+}
+
 void AcceleratorGauge::handle_intro_anim_cb(void *var, int32_t value)
 {
-    lv_subject_set_int(&accelerator_pos, value);
+    AcceleratorGauge *self = static_cast<AcceleratorGauge *>(var);
+    if (!self)
+    {
+        return;
+    }
+
+    self->set_value(value);
 }
 
 void AcceleratorGauge::handle_intro_anim_complete(lv_anim_t *anim)

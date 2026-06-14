@@ -25,8 +25,6 @@ QueueHandle_t ui_queue;
 
 lv_obj_t *main_screen;
 lv_obj_t *debug_text = NULL;
-lv_subject_t boost;
-lv_subject_t accelerator_pos;
 TurboGauge *turbo_gauge;
 AcceleratorGauge *accel_gauge;
 
@@ -189,10 +187,6 @@ void setup(void)
     esp_reset_reason_t reason = esp_reset_reason();
 
     lv_obj_clear_flag(main_screen, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_subject_init_int(&boost, 0);
-    // idk why the min value is 40
-    lv_subject_init_int(&accelerator_pos, 0x28);
     turbo_gauge = new TurboGauge(main_screen);
     accel_gauge = new AcceleratorGauge(main_screen);
 
@@ -260,8 +254,8 @@ void loop(void)
 
     if (!is_animating && resp == pdTRUE)
     {
-        lv_subject_set_int(&boost, car_data.boost);
-        lv_subject_set_int(&accelerator_pos, car_data.accelerator_pos);
+        turbo_gauge->set_value(car_data.boost);
+        accel_gauge->set_value(car_data.accelerator_pos);
     }
 
     vTaskDelay(pdMS_TO_TICKS(1));
